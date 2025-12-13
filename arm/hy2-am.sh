@@ -1,7 +1,8 @@
+#!/bin/sh
 
 echo "=============================="
 echo " Hysteria2 一键安装 - Alpine"
-echo " 交互式版启动（支持 ARM64/x86_64 自动适配）"
+echo " 交互式版（支持 ARM64/x86_64，已修复密码生成问题）"
 echo "=============================="
 
 # -------------------------------
@@ -12,13 +13,9 @@ printf "请输入监听端口 [默认 40443]: "
 read PORT
 [ -z "$PORT" ] && PORT=40443
 
-# 密码
-printf "请输入节点密码（留空将自动生成）: "
-read PASSWORD
-if [ -z "$PASSWORD" ]; then
-    PASSWORD=$(openssl rand -base64 16 | tr -dc 'A-Za-z0-9' | head -c 20)
-    echo "自动生成密码: $PASSWORD"
-fi
+# 密码（先读输入，后面再生成随机密码，以免 openssl 未安装）
+printf "请输入节点密码（留空将自动生成强随机密码）: "
+read USER_PASSWORD
 
 # 节点名称
 printf "请输入节点名称 [默认 Hysteria2_Node]: "
@@ -46,7 +43,6 @@ case $ARCH in
         exit 1
         ;;
 esac
-
 echo "检测到服务器架构: $ARCH → 将下载 $BINARY"
 
 # -------------------------------
@@ -56,12 +52,30 @@ pkill -f "/run/hysteria server" 2>/dev/null
 service hysteria stop 2>/dev/null
 
 # -------------------------------
-# 4. 安装依赖
+# 4. 安装依赖（必须先安装 openssl）
 # -------------------------------
 apk add --no-cache openssl iproute2 iptables ip6tables net-tools ca-certificates wget curl
 
 # -------------------------------
-# 5. 创建 setup 脚本（开机执行）
+# 5. 处理密码（现在 openssl 已安装，可以安全生成）
+# -------------------------------
+if [ -z "$USER_PASSWORD" ]; then
+    # 使用 openssl 生成强随机密码
+    PASSWORD=$(openssl rand -base64 32 | tr -dc 'A-Za-z0-9' | head -c 24)
+    echo "已自动生成强随机密码: $PASSWORD"
+else
+    PASSWORD="$USER_PASSWORD"
+    echo "使用您输入的密码"
+fi
+
+# 确保密码不为空（Hysteria2 不允许空密码）
+if [ -z "$PASSWORD" ]; then
+    echo "错误：密码不能为空！请重新运行脚本并输入密码或留空自动生成。"
+    exit 1
+fi
+
+# -------------------------------
+# 6. 创建 setup 脚本（开机执行）
 # -------------------------------
 cat > /usr/local/bin/setup-hysteria.sh <<EOC
 #!/bin/sh
@@ -110,7 +124,7 @@ EOC
 chmod +x /usr/local/bin/setup-hysteria.sh
 
 # -------------------------------
-# 6. OpenRC 服务文件
+# 7. OpenRC 服务文件
 # -------------------------------
 cat > /etc/init.d/hysteria <<'EOC'
 #!/sbin/openrc-run
@@ -146,22 +160,22 @@ chmod +x /etc/init.d/hysteria
 rc-update show default | grep -q hysteria || rc-update add hysteria default
 
 # -------------------------------
-# 7. 保存防火墙规则
+# 8. 保存防火墙规则
 # -------------------------------
 /etc/init.d/iptables save 2>/dev/null
 /etc/init.d/ip6tables save 2>/dev/null
 
 # -------------------------------
-# 8. 启动服务
+# 9. 启动服务
 # -------------------------------
-service hysteria start
+service hysteria restart
 
 echo ""
 echo "=== Hysteria2 安装完成，服务已启动 ==="
-ps aux | grep '[h]ysteria'
+ps aux | grep '[h]ysteria' || true
 
 # -------------------------------
-# 9. 输出节点信息（自动生成 v2rayN 链接）
+# 10. 输出节点信息
 # -------------------------------
 PUBLIC_IP=$(
   curl -s http://ipv4.ip.sb || \
@@ -189,7 +203,9 @@ echo "V2RayN 导入链接（复制整行）："
 echo "$NODE_URL"
 echo "=============================="
 echo ""
-echo "在 v2rayN / NekoBox / Clash Verge 等客户端中："
-echo "右键节点列表 → 从剪贴板导入 URL，即可添加此节点。"
+echo "支持客户端：v2rayN / NekoBox / Clash Verge / NecoBox / Shadowrocket 等"
+echo "操作：右键节点列表 → 从剪贴板导入 URL"
 echo ""
-echo "提示：如需修改配置，直接编辑 /usr/local/bin/setup-hysteria.sh 后执行 service hysteria restart 即可生效。"
+echo "修改配置 → 编辑 /usr/local/bin/setup-hysteria.sh"
+echo "然后执行：service hysteria restart 生效"
+echo "=============================="
